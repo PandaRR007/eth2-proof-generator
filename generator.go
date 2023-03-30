@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ssz "github.com/prysmaticlabs/fastssz"
-	"github.com/prysmaticlabs/prysm/v3/api/client/beacon"
-	"github.com/prysmaticlabs/prysm/v3/beacon-chain/rpc/apimiddleware"
-	"github.com/prysmaticlabs/prysm/v3/consensus-types/primitives"
-	"github.com/prysmaticlabs/prysm/v3/encoding/bytesutil"
-	v1 "github.com/prysmaticlabs/prysm/v3/proto/engine/v1"
-	eth "github.com/prysmaticlabs/prysm/v3/proto/prysm/v1alpha1"
+	fssz "github.com/prysmaticlabs/fastssz"
+	"github.com/prysmaticlabs/prysm/v4/api/client/beacon"
+	"github.com/prysmaticlabs/prysm/v4/beacon-chain/rpc/apimiddleware"
+	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
+	"github.com/prysmaticlabs/prysm/v4/encoding/bytesutil"
+	"github.com/prysmaticlabs/prysm/v4/encoding/ssz"
+	v1 "github.com/prysmaticlabs/prysm/v4/proto/engine/v1"
+	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 	"github.com/urfave/cli/v2"
 	"math/big"
 	"strconv"
@@ -20,10 +21,10 @@ import (
 
 const HOST = "https://lodestar-mainnet.chainsafe.io/"
 
-type bellatrixBlockResponseJson struct {
-	Version             string                                                 `json:"version"`
-	Data                *apimiddleware.SignedBeaconBlockBellatrixContainerJson `json:"data"`
-	ExecutionOptimistic bool                                                   `json:"execution_optimistic"`
+type beaconBlockResponseJson struct {
+	Version             string                                               `json:"version"`
+	Data                *apimiddleware.SignedBeaconBlockCapellaContainerJson `json:"data"`
+	ExecutionOptimistic bool                                                 `json:"execution_optimistic"`
 }
 
 func generateCMD() *cli.Command {
@@ -59,22 +60,19 @@ func generate(cliCtx *cli.Context) error {
 		panic(err)
 	}
 
-	blockResp := bellatrixBlockResponseJson{}
+	blockResp := beaconBlockResponseJson{}
 	if err := json.Unmarshal(data, &blockResp); err != nil {
 		panic(err)
 	}
 
+	isCapella := blockResp.Version == "capella"
 	body := blockResp.Data.Message.Body
-	depositCount, err := strconv.Atoi(body.Eth1Data.DepositCount)
-	if err != nil {
-		fmt.Print(err)
-	}
 
-	beaconBlockBody := eth.BeaconBlockBodyBellatrix{
+	beaconBlockBody := eth.BeaconBlockBodyCapella{
 		RandaoReveal: common.FromHex(body.RandaoReveal),
 		Eth1Data: &eth.Eth1Data{
 			DepositRoot:  common.FromHex(body.Eth1Data.DepositRoot),
-			DepositCount: uint64(depositCount),
+			DepositCount: stringToUint64(body.Eth1Data.DepositCount),
 			BlockHash:    common.FromHex(body.Eth1Data.BlockHash),
 		},
 		Graffiti:          common.FromHex(body.Graffiti),
@@ -87,7 +85,7 @@ func generate(cliCtx *cli.Context) error {
 			SyncCommitteeBits:      common.FromHex(body.SyncAggregate.SyncCommitteeBits),
 			SyncCommitteeSignature: common.FromHex(body.SyncAggregate.SyncCommitteeSignature),
 		},
-		ExecutionPayload: &v1.ExecutionPayload{
+		ExecutionPayload: &v1.ExecutionPayloadCapella{
 			ParentHash:    common.FromHex(body.ExecutionPayload.ParentHash),
 			FeeRecipient:  common.FromHex(body.ExecutionPayload.FeeRecipient),
 			StateRoot:     common.FromHex(body.ExecutionPayload.StateRoot),
@@ -102,7 +100,9 @@ func generate(cliCtx *cli.Context) error {
 			BaseFeePerGas: nil,
 			BlockHash:     common.FromHex(body.ExecutionPayload.BlockHash),
 			Transactions:  nil,
+			Withdrawals:   nil,
 		},
+		BlsToExecutionChanges: nil,
 	}
 
 	baseFee, ret := new(big.Int).SetString(body.ExecutionPayload.BaseFeePerGas, 10)
@@ -146,15 +146,15 @@ func generate(cliCtx *cli.Context) error {
 		attestaton := &eth.Attestation{
 			AggregationBits: common.FromHex(att.AggregationBits),
 			Data: &eth.AttestationData{
-				Slot:            types.Slot(stringToUint64(att.Data.Slot)),
-				CommitteeIndex:  types.CommitteeIndex(stringToUint64(att.Data.CommitteeIndex)),
+				Slot:            primitives.Slot(stringToUint64(att.Data.Slot)),
+				CommitteeIndex:  primitives.CommitteeIndex(stringToUint64(att.Data.CommitteeIndex)),
 				BeaconBlockRoot: common.FromHex(att.Data.BeaconBlockRoot),
 				Source: &eth.Checkpoint{
-					Epoch: types.Epoch(stringToUint64(att.Data.Source.Epoch)),
+					Epoch: primitives.Epoch(stringToUint64(att.Data.Source.Epoch)),
 					Root:  common.FromHex(att.Data.Source.Root),
 				},
 				Target: &eth.Checkpoint{
-					Epoch: types.Epoch(stringToUint64(att.Data.Target.Epoch)),
+					Epoch: primitives.Epoch(stringToUint64(att.Data.Target.Epoch)),
 					Root:  common.FromHex(att.Data.Target.Root),
 				},
 			},
@@ -184,8 +184,8 @@ func generate(cliCtx *cli.Context) error {
 	for _, ve := range body.VoluntaryExits {
 		voluntaryExist := &eth.SignedVoluntaryExit{
 			Exit: &eth.VoluntaryExit{
-				Epoch:          types.Epoch(stringToUint64(ve.Exit.Epoch)),
-				ValidatorIndex: types.ValidatorIndex(stringToUint64(ve.Exit.ValidatorIndex)),
+				Epoch:          primitives.Epoch(stringToUint64(ve.Exit.Epoch)),
+				ValidatorIndex: primitives.ValidatorIndex(stringToUint64(ve.Exit.ValidatorIndex)),
 			},
 			Signature: common.FromHex(ve.Signature),
 		}
@@ -196,7 +196,31 @@ func generate(cliCtx *cli.Context) error {
 		beaconBlockBody.ExecutionPayload.Transactions = append(beaconBlockBody.ExecutionPayload.Transactions, common.FromHex(tx))
 	}
 
-	tree1, err := newBeaconBlockBodyTree(&beaconBlockBody)
+	if isCapella {
+		for _, wd := range body.ExecutionPayload.Withdrawals {
+			withdraw := &v1.Withdrawal{
+				Index:          stringToUint64(wd.WithdrawalIndex),
+				ValidatorIndex: primitives.ValidatorIndex(stringToUint64(wd.ValidatorIndex)),
+				Address:        common.FromHex(wd.ExecutionAddress),
+				Amount:         stringToUint64(wd.Amount),
+			}
+			beaconBlockBody.ExecutionPayload.Withdrawals = append(beaconBlockBody.ExecutionPayload.Withdrawals, withdraw)
+		}
+
+		for _, changes := range body.BLSToExecutionChanges {
+			change := &eth.SignedBLSToExecutionChange{
+				Message: &eth.BLSToExecutionChange{
+					ValidatorIndex:     primitives.ValidatorIndex(stringToUint64(changes.Message.ValidatorIndex)),
+					FromBlsPubkey:      common.FromHex(changes.Message.FromBLSPubkey),
+					ToExecutionAddress: common.FromHex(changes.Message.ToExecutionAddress),
+				},
+				Signature: common.FromHex(changes.Signature),
+			}
+			beaconBlockBody.BlsToExecutionChanges = append(beaconBlockBody.BlsToExecutionChanges, change)
+		}
+	}
+
+	tree1, err := newBeaconBlockBodyTree(&beaconBlockBody, isCapella)
 	if err != nil {
 		panic(err)
 	}
@@ -206,25 +230,7 @@ func generate(cliCtx *cli.Context) error {
 		panic(err)
 	}
 
-	tree2, err := newExecutionPayloadTree(beaconBlockBody.ExecutionPayload)
-	if err != nil {
-		panic(err)
-	}
-
-	proof2, err := tree2.getBlockHashProof()
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("proof1 hash size", len(proof1.Hashes))
-
-	hashes := append(proof1.Hashes, proof2.Hashes...)
-	for _, hash := range hashes {
-		fmt.Println(hexutil.Encode(hash[:]))
-	}
-
-	root, _ := beaconBlockBody.ExecutionPayload.HashTreeRoot()
-	ret, err = ssz.VerifyProof(root[:], proof2)
+	ret, err = fssz.VerifyProof(tree1.getRoot(), proof1)
 	if err != nil {
 		panic(err)
 	}
@@ -233,14 +239,35 @@ func generate(cliCtx *cli.Context) error {
 		return fmt.Errorf("VerifyProof fail")
 	}
 
+	for _, hash := range proof1.Hashes {
+		fmt.Println(hexutil.Encode(hash[:]))
+	}
+
+	txRoot, err := ssz.TransactionsRoot(beaconBlockBody.ExecutionPayload.Transactions)
+	if err != nil {
+		return fmt.Errorf("TransactionsRoot fail: %v", err)
+	}
+
+	fmt.Println("txRoot", hexutil.Encode(txRoot[:]))
+
+	if isCapella {
+		wdRoot, err := ssz.WithdrawalSliceRoot(beaconBlockBody.ExecutionPayload.Withdrawals, 16)
+		if err != nil {
+			return fmt.Errorf("WithdrawalsRoot fail: %v", err)
+		}
+		fmt.Println("wdRoot", hexutil.Encode(wdRoot[:]))
+	} else {
+		fmt.Println("wdRoot", hexutil.Encode(common.Hash{}.Bytes()[:]))
+	}
+
 	return nil
 
 }
 
 func convertToBeaconBlockHeader(header *apimiddleware.BeaconBlockHeaderJson) *eth.BeaconBlockHeader {
 	return &eth.BeaconBlockHeader{
-		Slot:          types.Slot(stringToUint64(header.Slot)),
-		ProposerIndex: types.ValidatorIndex(stringToUint64(header.ProposerIndex)),
+		Slot:          primitives.Slot(stringToUint64(header.Slot)),
+		ProposerIndex: primitives.ValidatorIndex(stringToUint64(header.ProposerIndex)),
 		ParentRoot:    common.FromHex(header.ParentRoot),
 		StateRoot:     common.FromHex(header.StateRoot),
 		BodyRoot:      common.FromHex(header.BodyRoot),
@@ -249,15 +276,15 @@ func convertToBeaconBlockHeader(header *apimiddleware.BeaconBlockHeaderJson) *et
 
 func convertToAttestationData(data *apimiddleware.AttestationDataJson) *eth.AttestationData {
 	return &eth.AttestationData{
-		Slot:            types.Slot(stringToUint64(data.Slot)),
-		CommitteeIndex:  types.CommitteeIndex(stringToUint64(data.CommitteeIndex)),
+		Slot:            primitives.Slot(stringToUint64(data.Slot)),
+		CommitteeIndex:  primitives.CommitteeIndex(stringToUint64(data.CommitteeIndex)),
 		BeaconBlockRoot: common.FromHex(data.BeaconBlockRoot),
 		Source: &eth.Checkpoint{
-			Epoch: types.Epoch(stringToUint64(data.Source.Epoch)),
+			Epoch: primitives.Epoch(stringToUint64(data.Source.Epoch)),
 			Root:  common.FromHex(data.Source.Root),
 		},
 		Target: &eth.Checkpoint{
-			Epoch: types.Epoch(stringToUint64(data.Target.Epoch)),
+			Epoch: primitives.Epoch(stringToUint64(data.Target.Epoch)),
 			Root:  common.FromHex(data.Target.Root),
 		},
 	}

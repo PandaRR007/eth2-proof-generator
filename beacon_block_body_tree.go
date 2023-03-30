@@ -2,7 +2,7 @@ package main
 
 import (
 	ssz "github.com/prysmaticlabs/fastssz"
-	eth "github.com/prysmaticlabs/prysm/v3/proto/prysm/v1alpha1"
+	eth "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 )
 
 type BeaconBlockBodyTree struct {
@@ -14,7 +14,7 @@ const BeaconBlockBodyTreeExecutionPayloadIndex int = 9
 var zeroBytes = make([]byte, 32)
 
 // HashTreeRootWith ssz hashes the BeaconBlockBellatrix object with a hasher
-func newBeaconBlockBodyTree(b *eth.BeaconBlockBodyBellatrix) (*BeaconBlockBodyTree, error) {
+func newBeaconBlockBodyTree(b *eth.BeaconBlockBodyCapella, capella bool) (*BeaconBlockBodyTree, error) {
 	var chunks [][]byte
 
 	hh := ssz.DefaultHasherPool.Get()
@@ -209,7 +209,36 @@ func newBeaconBlockBodyTree(b *eth.BeaconBlockBodyBellatrix) (*BeaconBlockBodyTr
 		chunks = append(chunks, root[:])
 	}
 
-	for i := 0; i < 6; i++ {
+	if capella {
+		// Field (10) 'BlsToExecutionChanges'
+		hh.Reset()
+		subIndx := hh.Index()
+		num := uint64(len(b.BlsToExecutionChanges))
+		if num > 16 {
+			return nil, ssz.ErrIncorrectListSize
+		}
+		for _, elem := range b.BlsToExecutionChanges {
+			if err := elem.HashTreeRootWith(hh); err != nil {
+				return nil, err
+			}
+		}
+		if ssz.EnableVectorizedHTR {
+			hh.MerkleizeWithMixinVectorizedHTR(subIndx, num, 16)
+		} else {
+			hh.MerkleizeWithMixin(subIndx, num, 16)
+		}
+
+		root, err := hh.HashRoot()
+		if err != nil {
+			return nil, err
+		}
+
+		chunks = append(chunks, root[:])
+	} else {
+		chunks = append(chunks, zeroBytes)
+	}
+
+	for i := 0; i < 5; i++ {
 		chunks = append(chunks, zeroBytes)
 	}
 

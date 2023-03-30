@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	ssz "github.com/prysmaticlabs/fastssz"
-	v1 "github.com/prysmaticlabs/prysm/v3/proto/engine/v1"
+	v1 "github.com/prysmaticlabs/prysm/v4/proto/engine/v1"
 )
 
 type ExecutionPayloadTree struct {
@@ -14,7 +14,7 @@ type ExecutionPayloadTree struct {
 const ExecutionPayloadTreeBlockHashIndex int = 12
 
 // HashTreeRootWith ssz hashes the BeaconBlockBellatrix object with a hasher
-func newExecutionPayloadTree(e *v1.ExecutionPayload) (*ExecutionPayloadTree, error) {
+func newExecutionPayloadTree(e *v1.ExecutionPayloadCapella) (*ExecutionPayloadTree, error) {
 	var chunks [][]byte
 	hh := ssz.DefaultHasherPool.Get()
 
@@ -203,18 +203,16 @@ func newExecutionPayloadTree(e *v1.ExecutionPayload) (*ExecutionPayloadTree, err
 			return nil, ssz.ErrIncorrectListSize
 		}
 		for _, elem := range e.Transactions {
-			{
-				elemIndx := hh.Index()
-				byteLen := uint64(len(elem))
-				if byteLen > 1073741824 {
-					return nil, ssz.ErrIncorrectListSize
-				}
-				hh.AppendBytes32(elem)
-				if ssz.EnableVectorizedHTR {
-					hh.MerkleizeWithMixinVectorizedHTR(elemIndx, byteLen, (1073741824+31)/32)
-				} else {
-					hh.MerkleizeWithMixin(elemIndx, byteLen, (1073741824+31)/32)
-				}
+			elemIndx := hh.Index()
+			byteLen := uint64(len(elem))
+			if byteLen > 1073741824 {
+				return nil, ssz.ErrIncorrectListSize
+			}
+			hh.AppendBytes32(elem)
+			if ssz.EnableVectorizedHTR {
+				hh.MerkleizeWithMixinVectorizedHTR(elemIndx, byteLen, (1073741824+31)/32)
+			} else {
+				hh.MerkleizeWithMixin(elemIndx, byteLen, (1073741824+31)/32)
 			}
 		}
 		if ssz.EnableVectorizedHTR {
@@ -230,7 +228,33 @@ func newExecutionPayloadTree(e *v1.ExecutionPayload) (*ExecutionPayloadTree, err
 		fmt.Println("tx hash", common.BytesToHash(root[:]).String())
 	}
 
-	for i := 0; i < 2; i++ {
+	{
+		// Field (14) 'Withdrawals'
+		hh.Reset()
+		subIndx := hh.Index()
+		num := uint64(len(e.Withdrawals))
+		if num > 16 {
+			return nil, ssz.ErrIncorrectListSize
+		}
+		for _, elem := range e.Withdrawals {
+			if err := elem.HashTreeRootWith(hh); err != nil {
+				return nil, err
+			}
+		}
+		if ssz.EnableVectorizedHTR {
+			hh.MerkleizeWithMixinVectorizedHTR(subIndx, num, 16)
+		} else {
+			hh.MerkleizeWithMixin(subIndx, num, 16)
+		}
+
+		root, err := hh.HashRoot()
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, root[:])
+	}
+
+	for i := 0; i < 1; i++ {
 		chunks = append(chunks, zeroBytes)
 	}
 
